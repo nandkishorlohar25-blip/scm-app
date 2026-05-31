@@ -1,0 +1,277 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum OrganizationType {
+  MANUFACTURING
+  RETAIL
+}
+
+model Organization {
+  id              String           @id @default(uuid())
+  name            String
+  type            OrganizationType
+  currency        String           @default("USD")
+  timezone        String           @default("UTC")
+  fiscalYearStart String           @default("01-01")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  users          User[]
+  suppliers      Supplier[]
+  products       Product[]
+  warehouses     Warehouse[]
+  purchaseOrders PurchaseOrder[]
+  shipments      Shipment[]
+
+  @@index([type])
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  WAREHOUSE_STAFF
+  VIEWER
+}
+
+model User {
+  id        String   @id // Clerk User ID
+  orgId     String
+  role      Role     @default(VIEWER)
+  name      String
+  email     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([role])
+}
+
+model Supplier {
+  id           String   @id @default(uuid())
+  orgId        String
+  name         String
+  contactName  String?
+  email        String?
+  phone        String?
+  address      String?
+  country      String?
+  leadTimeDays Int      @default(7)
+  paymentTerms String?
+  rating       Int      @default(5) // Rating 1-5
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organization   Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+
+  @@index([orgId])
+  @@index([isActive])
+}
+
+enum ProductType {
+  RAW_MATERIAL
+  FINISHED_GOOD
+  MERCHANDISE
+}
+
+model Product {
+  id            String      @id @default(uuid())
+  orgId         String
+  sku           String      @unique
+  name          String
+  description   String?
+  category      String
+  unitOfMeasure String
+  costPrice     Int         // Stored in lowest denomination (paise/cents)
+  sellingPrice  Int         // Stored in lowest denomination (paise/cents)
+  reorderPoint  Int
+  reorderQty    Int
+  type          ProductType
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Manufacturing relations
+  bomFinished BillOfMaterials[] @relation("BomFinished")
+  bomMaterials BillOfMaterials[] @relation("BomMaterials")
+
+  inventoryItems     InventoryItem[]
+  purchaseOrderLines PurchaseOrderLine[]
+  stockMovements     StockMovement[]
+
+  @@index([orgId])
+  @@index([category])
+  @@index([type])
+  @@index([isActive])
+}
+
+model BillOfMaterials {
+  id                String @id @default(uuid())
+  finishedProductId String
+  rawMaterialId     String
+  quantityRequired  Float
+  unit              String
+
+  finishedProduct Product @relation("BomFinished", fields: [finishedProductId], references: [id], onDelete: Cascade)
+  rawMaterial     Product @relation("BomMaterials", fields: [rawMaterialId], references: [id], onDelete: Cascade)
+
+  @@index([finishedProductId])
+  @@index([rawMaterialId])
+}
+
+model Warehouse {
+  id        String   @id @default(uuid())
+  orgId     String
+  name      String
+  location  String?
+  address   String?
+  managerId String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization   Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inventoryItems InventoryItem[]
+  stockMovements StockMovement[]
+  shipments      Shipment[]
+
+  @@index([orgId])
+  @@index([isActive])
+}
+
+model InventoryItem {
+  id               String   @id @default(uuid())
+  warehouseId      String
+  productId        String
+  quantityOnHand   Int      @default(0)
+  quantityReserved Int      @default(0)
+  binLocation      String?
+  lastUpdated      DateTime @default(now()) @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, productId])
+  @@index([warehouseId])
+  @@index([productId])
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  CONFIRMED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id                   String              @id @default(uuid())
+  orgId                String
+  supplierId           String
+  status               PurchaseOrderStatus @default(DRAFT)
+  orderDate            DateTime            @default(now())
+  expectedDeliveryDate DateTime?
+  receivedDate         DateTime?
+  totalAmount          Int                 // Stored in lowest denomination (paise/cents)
+  notes                String?
+  createdById          String
+
+  organization Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  supplier     Supplier            @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  lines        PurchaseOrderLine[]
+
+  @@index([orgId])
+  @@index([supplierId])
+  @@index([status])
+}
+
+model PurchaseOrderLine {
+  id               String @id @default(uuid())
+  purchaseOrderId  String
+  productId        String
+  quantityOrdered  Int
+  quantityReceived Int    @default(0)
+  unitCost         Int    // Stored in lowest denomination (paise/cents)
+  totalCost        Int    // Stored in lowest denomination (paise/cents)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+enum ShipmentType {
+  INBOUND
+  OUTBOUND
+}
+
+enum ShipmentStatus {
+  PENDING
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+}
+
+model Shipment {
+  id                 String         @id @default(uuid())
+  orgId              String
+  type               ShipmentType
+  status             ShipmentStatus @default(PENDING)
+  trackingNumber     String?
+  carrier            String?
+  originAddress      String?
+  destinationAddress String?
+  dispatchDate       DateTime?
+  estimatedArrival   DateTime?
+  actualArrival      DateTime?
+  warehouseId        String?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@index([status])
+  @@index([warehouseId])
+}
+
+enum StockMovementType {
+  RECEIPT
+  ISSUE
+  TRANSFER
+  ADJUSTMENT
+  RETURN
+}
+
+model StockMovement {
+  id            String            @id @default(uuid())
+  productId     String
+  warehouseId   String
+  type          StockMovementType
+  quantity      Int
+  referenceId   String?
+  referenceType String?
+  performedById String
+  movedAt       DateTime          @default(now())
+  notes         String?
+
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([warehouseId])
+  @@index([movedAt])
+}
